@@ -10,8 +10,8 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Data loader setup
 bdd_data = BDDDataset(
-    root_dir='/path/to/train/images',
-    mask_dir='/path/to/train/masks',
+    root_dir='/scratch/ch3451/datasets/bdd100k-evals/images/10k/train',
+    mask_dir='/scratch/ch3451/datasets/bdd100k-evals/labels/sem_seg/masks/train',
     transform=transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
@@ -22,7 +22,7 @@ dataloader = DataLoader(bdd_data, batch_size=1, shuffle=False)
 # Load models
 dino_model = DilatedResNet50().to(device)
 imagenet_model = ResNet50WithFeatureOutput().to(device)
-load_model_weights(dino_model, "/path/to/dino/weights.pth", device)
+load_model_weights(dino_model, "/scratch/ch3451/share/for-pathways/dino-resnet-bdd100k-highres-epoch100.pth", device)
 load_model_weights(imagenet_model, "imagenet", device)
 
 # Process data
