@@ -67,12 +67,12 @@ def generate_heatmap(model, img_tensor):
     heatmap = features.mean(dim=1).squeeze()
     heatmap = F.interpolate(heatmap.unsqueeze(0).unsqueeze(0), size=(720, 1280), mode='bilinear').squeeze(0).squeeze(0)
     heatmap = np.maximum(heatmap.cpu().numpy(), 0)
-    heatmap /= heatmap.max() if heatmap.max() != 0 else 1
+    heatmap /= (heatmap.max() + 1e-6)  # Avoid division by zero, ensure normalized
     return heatmap
 
 def calculate_overlap_score(heatmap, mask, threshold=0.5):
     heatmap_binary = (heatmap > threshold).astype(float)
-    mask_binary = mask.cpu().numpy()
+    mask_binary = (mask > threshold).cpu().numpy()  # Threshold the mask to binary
 
     intersection = (heatmap_binary * mask_binary).sum()
     union = heatmap_binary.sum() + mask_binary.sum() - intersection
@@ -87,34 +87,70 @@ def denormalize(tensor, mean, std):
     return tensor * std + mean
 
 
-# Save heatmap visualization
-def save_heatmap(image, heatmap, mask, filename, output_dir, overlap_score):
-    os.makedirs(output_dir, exist_ok=True)
-    plt.figure(figsize=(12, 6))
+# Adjustments to iterative refinement to handle empty heatmaps
+def iterative_refinement(heatmap, threshold=0.5, max_iterations=10):
+    refined_regions = []
+    refined_heatmaps = []
+    heatmap_tensor = torch.tensor(heatmap, dtype=torch.float).to(device)
 
-    plt.subplot(1, 3, 1)
+    for i in range(max_iterations):
+        h_filter = (heatmap_tensor.max(1)[0] > threshold).int()
+        w_filter = (heatmap_tensor.max(0)[0] > threshold).int()
+
+        if torch.nonzero(h_filter).numel() == 0 or torch.nonzero(w_filter).numel() == 0:
+            threshold *= 0.9  # Adjust threshold
+            if threshold < 0.1:  # Minimal threshold fallback
+                threshold = 0.1
+            continue
+
+        h_min, h_max = torch.nonzero(h_filter).view(-1)[[0, -1]]
+        w_min, w_max = torch.nonzero(w_filter).view(-1)[[0, -1]]
+        refined_regions.append((h_min.item() / heatmap_tensor.shape[0],
+                                w_min.item() / heatmap_tensor.shape[1],
+                                h_max.item() / heatmap_tensor.shape[0],
+                                w_max.item() / heatmap_tensor.shape[1]))
+
+        refined_region = heatmap_tensor[h_min:h_max, w_min:w_max].clone()
+        refined_heatmaps.append(refined_region.cpu().numpy())
+        heatmap_tensor[h_min:h_max, w_min:w_max] = 0  # Zero-out refined region
+
+    # Fallback if no refinement is found
+    if not refined_regions:
+        refined_regions.append((0, 0, 1, 1))  # Full area as fallback
+        refined_heatmaps.append(heatmap)
+    return refined_regions, refined_heatmaps
+
+# Visualize multiple refined heatmaps
+def visualize_refined_heatmaps(image, original_heatmap, mask, refined_regions, refined_heatmaps, filename, output_dir, overlap_score):
+    os.makedirs(output_dir, exist_ok=True)
+    plt.figure(figsize=(12, 6 + len(refined_regions) * 2))
+
+    # Display original image and heatmap
+    plt.subplot(len(refined_regions) + 2, 1, 1)
     plt.imshow(image.permute(1, 2, 0).cpu().numpy())
     plt.title("Original Image")
     plt.axis("off")
 
-    plt.subplot(1, 3, 2)
+    plt.subplot(len(refined_regions) + 2, 1, 2)
     plt.imshow(image.permute(1, 2, 0).cpu().numpy())
-    plt.imshow(heatmap, cmap="jet", alpha=0.5)
-    plt.title(f"Heatmap\nOverlap: {overlap_score:.4f}")
+    plt.imshow(original_heatmap, cmap="jet", alpha=0.5)
+    plt.title(f"Original Heatmap\nOverlap: {overlap_score:.4f}")
     plt.axis("off")
 
-    plt.subplot(1, 3, 3)
-    plt.imshow(mask.squeeze().cpu().numpy(), cmap="gray", alpha=0.7)
-    plt.title("Ground Truth Mask")
-    plt.axis("off")
+    # Display refined heatmaps for each iteration
+    for idx, (region, refined_heatmap) in enumerate(zip(refined_regions, refined_heatmaps)):
+        plt.subplot(len(refined_regions) + 2, 1, idx + 3)
+        plt.imshow(refined_heatmap, cmap="jet")
+        plt.title(f"Refined Region {idx + 1}: {region}")
+        plt.axis("off")
 
     plt.tight_layout()
-    output_path = os.path.join(output_dir, filename[0] if isinstance(filename, tuple) else filename)
+    output_path = os.path.join(output_dir, filename)
     plt.savefig(output_path)
     plt.close()
     print(f"Saved: {output_path}")
 
-# Main script
+# Main script with iterative refinement logic
 if __name__ == "__main__":
     dataset = BDDDataset(
         root_dir='/scratch/ch3451/datasets/bdd100k-evals/images/10k/train',
@@ -126,45 +162,35 @@ if __name__ == "__main__":
     )
 
     dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
-    # Initialize the model without the `pretrained_weights` argument
     model = DilatedResNet50().to(device)
 
-    # Load custom weights into the model
     DilatedResNet50.load_dino_weights(
         model, "/scratch/ch3451/share/for-pathways/dino-resnet-bdd100k-highres-epoch100.pth"
-)
-
+    )
 
     output_dir = "heatmap_outputs"
 
     for img, mask, filename_tuple in dataloader:
-        filename = filename_tuple[0]  # Extract the string from the tuple
+        filename = filename_tuple[0]
 
         img = img.to(device)
         heatmap = generate_heatmap(model, img)
 
-         # Bounding box refinement
-        t = 0.5  # Threshold
-        hmap = torch.tensor(heatmap).to(device)
-        Hi, Wi = hmap.shape
-        h_filter = (hmap.max(1)[0] > t).int()
-        w_filter = (hmap.max(0)[0] > t).int()
+        # Initialize the heatmap for meaningful refinement
+        if heatmap.max() < 1e-3:
+            print(f"Skipping {filename}: Heatmap is too weak.")
+            continue
 
-        bounding_box = None
-        if torch.nonzero(h_filter).numel() > 0 and torch.nonzero(w_filter).numel() > 0:
-            h_min, h_max = torch.nonzero(h_filter).view(-1)[[0, -1]]
-            w_min, w_max = torch.nonzero(w_filter).view(-1)[[0, -1]]
-            bounding_box = (h_min / Hi, w_min / Wi, h_max / Hi, w_max / Wi)
+        # Iterative refinement with adjusted logic
+        refined_regions, refined_heatmaps = iterative_refinement(torch.tensor(heatmap), threshold=0.5, max_iterations=5)
 
-            # Refine heatmap
-            refined_heatmap = torch.zeros_like(hmap)
-            refined_heatmap[h_min:h_max, w_min:w_max] = hmap[h_min:h_max, w_min:w_max]
-        else:
-            refined_heatmap = hmap.cpu().numpy()
-
-
+        # Compute overlap score
         overlap_score = calculate_overlap_score(heatmap, mask, threshold=0.5)
+
+        # Denormalize image
         denorm_image = denormalize(img.squeeze(), mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        # Save the refined heatmap
-        save_heatmap(denorm_image, refined_heatmap.cpu().numpy(), mask, filename, output_dir, overlap_score)
-        #save_heatmap(denorm_image, heatmap, mask, filename, output_dir, overlap_score)
+
+        # Visualize refined heatmaps
+        visualize_refined_heatmaps(denorm_image, heatmap, mask, refined_regions, refined_heatmaps, filename, output_dir, overlap_score)
+
+
