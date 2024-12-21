@@ -22,8 +22,8 @@ dataloader = DataLoader(bdd_data, batch_size=1, shuffle=False)
 # Load models
 dino_model = DilatedResNet50().to(device)
 imagenet_model = ResNet50WithFeatureOutput().to(device)
-load_model_weights(dino_model, "/scratch/ch3451/share/for-pathways/dino-resnet-bdd100k-highres-epoch100.pth", device)
-load_model_weights(imagenet_model, "imagenet", device)
+load_model_weights(dino_model, "/scratch/ch3451/share/for-pathways/dino-resnet-bdd100k-highres-epoch100.pth")
+load_model_weights(imagenet_model, "imagenet")
 
 # Process data
 for img, mask, img_path in dataloader:

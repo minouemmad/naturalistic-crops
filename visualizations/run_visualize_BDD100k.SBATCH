@@ -14,4 +14,4 @@ module purge
 singularity exec --nv \
     --overlay /scratch/mae9855/ContrastiveCrop/overlay-50G-10M.ext3:ro \
     /scratch/work/public/singularity/cuda12.1.1-cudnn8.9.0-devel-ubuntu22.04.2.sif \
-    /bin/bash -c "python3.10 visualize_semantic_BDD100K.py"
+    /bin/bash -c "python3.10 main.py"

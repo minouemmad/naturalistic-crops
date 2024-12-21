@@ -2,11 +2,13 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
+
+# Generate Heatmap by Averaging Feature Channels
 def generate_heatmap(model, img_tensor):
     with torch.no_grad():
         features = model(img_tensor, return_feat=True)
     heatmap = features.mean(dim=1).squeeze()
-    heatmap = F.interpolate(heatmap.unsqueeze(0).unsqueeze(0), size=(720, 1280), mode='bilinear').squeeze()
+    heatmap = F.interpolate(heatmap.unsqueeze(0).unsqueeze(0), size=(720, 1280), mode='bilinear').squeeze(0).squeeze(0)
     heatmap = np.maximum(heatmap.cpu().numpy(), 0)
     heatmap /= heatmap.max() if heatmap.max() != 0 else 1
     return heatmap
