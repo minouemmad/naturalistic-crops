@@ -112,7 +112,8 @@ def iterative_refinement(heatmap, threshold=0.5, max_iterations=10):
 
         refined_region = heatmap_tensor[h_min:h_max, w_min:w_max].clone()
         refined_heatmaps.append(refined_region.cpu().numpy())
-        heatmap_tensor[h_min:h_max, w_min:w_max] = 0  # Zero-out refined region
+        break
+#        heatmap_tensor[h_min:h_max, w_min:w_max] = 0  # Zero-out refined region
 
     # Fallback if no refinement is found
     if not refined_regions:
@@ -139,7 +140,7 @@ def visualize_refined_heatmaps(image, original_heatmap, mask, refined_regions, r
 
     # Display refined heatmaps for each iteration
     for idx, (region, refined_heatmap) in enumerate(zip(refined_regions, refined_heatmaps)):
-        plt.subplot(len(refined_regions) + 2, 1, idx + 3)
+        plt.subplot(len(refined_regions)+2, 1, idx+3)
         plt.imshow(refined_heatmap, cmap="jet")
         plt.title(f"Refined Region {idx + 1}: {region}")
         plt.axis("off")
